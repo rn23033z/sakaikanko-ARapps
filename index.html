@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>ARスタンプラリー & キャラクター図鑑</title>
+
+  <!-- A-Frame & AR.js -->
+  <script src="https://aframe.io/releases/1.3.0/aframe.min.js"></script>
+  <script src="https://raw.githack.com/AR-js-org/AR.js/master/aframe/build/aframe-ar.js"></script>
+
+  <style>
+    :root {
+      --primary: #FF9800;
+      --bg: #F5F7FA;
+      --card-bg: #FFFFFF;
+      --text: #333333;
+    }
+    body {
+      margin: 0; padding: 0; font-family: -apple-system, sans-serif;
+      background: var(--bg); color: var(--text); user-select: none;
+    }
+
+    /* === 画面ビュー制御 === */
+    .view { display: none; width: 100vw; height: 100vh; position: fixed; top: 0; left: 0; overflow-y: auto; box-sizing: border-box; }
+    .view.active { display: block; z-index: 10; }
+
+    /* === ナビゲーションバー === */
+    .nav-bar {
+      position: fixed; bottom: 0; left: 0; width: 100%; height: 60px;
+      background: white; display: flex; justify-content: space-around; align-items: center;
+      box-shadow: 0 -2px 10px rgba(0,0,0,0.05); z-index: 100;
+    }
+    .nav-item { border: none; background: none; font-size: 12px; color: #888; font-weight: bold; cursor: pointer; }
+    .nav-item.active { color: var(--primary); }
+    .nav-icon { font-size: 20px; display: block; margin-bottom: 2px; }
+
+    /* === ヘッダー & カードスタイル === */
+    .header { padding: 20px; text-align: center; background: white; box-shadow: 0 2px 5px rgba(0,0,0,0.03); }
+    .header h1 { margin: 0; font-size: 20px; color: var(--primary); }
+    .container { padding: 20px; padding-bottom: 80px; }
+
+    .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px; }
+    .card {
+      background: var(--card-bg); border-radius: 15px; padding: 15px; text-align: center;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.05); border: 2px solid transparent; cursor: pointer;
+    }
+    .card.unlocked { border-color: var(--primary); }
+    .card-icon { font-size: 50px; margin-bottom: 5px; opacity: 0.2; filter: grayscale(100%); }
+    .card.unlocked .card-icon { opacity: 1; filter: grayscale(0%); }
+    .card-title { font-weight: bold; font-size: 14px; }
+
+    .btn-main {
+      display: block; width: 100%; padding: 15px; margin-top: 15px;
+      background: var(--primary); color: white; border: none; border-radius: 25px;
+      font-size: 16px; font-weight: bold; cursor: pointer; text-align: center;
+    }
+
+    /* === AR & カメラオーバーレイ === */
+    #ar-view { background: transparent; z-index: 20; }
+    .btn-close {
+      position: absolute; top: 20px; left: 20px; background: rgba(0,0,0,0.6);
+      color: white; border: none; padding: 10px 18px; border-radius: 20px; font-weight: bold; z-index: 30;
+    }
+    /* プログレスゲージ */
+    #progress-box {
+      position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+      text-align: center; color: white; display: none; z-index: 30;
+    }
+
+    /* モーダルポップアップ */
+    .modal {
+      position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+      background: rgba(0,0,0,0.7); display: none; align-items: center; justify-content: center; z-index: 200;
+    }
+    .modal-content { background: white; border-radius: 20px; padding: 25px; width: 80%; max-width: 300px; text-align: center; }
+
+    /* === モード別UI (チャット/撮影/解説) === */
+    /* 1. AR撮影 */
+    #photo-container { position: relative; width: 100%; height: 60vh; background: #000; overflow: hidden; border-radius: 15px; }
+    #camera-video { width: 100%; height: 100%; object-fit: cover; }
+    #overlay-char { position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); font-size: 120px; pointer-events: none; }
+    
+    /* 2. チャット */
+    .chat-box { height: 50vh; border: 1px solid #ddd; border-radius: 15px; padding: 15px; overflow-y: auto; background: white; margin-bottom: 10px; }
+    .chat-msg { margin-bottom: 10px; display: flex; }
+    .chat-msg.user { justify-content: flex-end; }
+    .chat-bubble { max-width: 70%; padding: 10px 15px; border-radius: 15px; font-size: 14px; }
+    .chat-msg.char .chat-bubble { background: #E9ECEF; color: #333; }
+    .chat-msg.user .chat-bubble { background: var(--primary); color: white; }
+    .chat-input-set { display: flex; gap: 5px; }
+    .chat-input-set input { flex: 1; padding: 10px; border: 1px solid #ccc; border-radius: 20px; }
+  </style>
+</head>
+<body>
+
+  <!-- ==================== 1. スタンプ一覧ビュー ==================== -->
+  <div id="view-stamps" class="view active">
+    <div class="header"><h1>QR/AR スタンプラリー</h1></div>
+    <div class="container">
+      <div class="grid" id="stamp-grid"></div>
+      <button class="btn-main" onclick="startAR()">📷 カメラでスタンプを探す</button>
+    </div>
+  </div>
+
+  <!-- ==================== 2. 図鑑・コレクションビュー ==================== -->
+  <div id="view-collection" class="view">
+    <div class="header"><h1>図鑑・コレクション</h1></div>
+    <div class="container">
+      <h3>友達になったキャラクター</h3>
+      <div class="grid" id="char-grid"></div>
+    </div>
+  </div>
+
+  <!-- ==================== 3. AR読取画面 ==================== -->
+  <div id="ar-view" class="view">
+    <button class="btn-close" onclick="stopAR()">← 戻る</button>
+    <div id="progress-box">
+      <div style="font-size: 24px; font-weight: bold;" id="gauge-text">読み込み中...</div>
+    </div>
+  </div>
+
+  <!-- ==================== 4. キャラ詳細・モード選択モーダル ==================== -->
+  <div id="modal-char-detail" class="modal">
+    <div class="modal-content">
+      <div id="detail-icon" style="font-size: 70px;"></div>
+      <h2 id="detail-name" style="margin: 5px 0;"></h2>
+      <p id="detail-desc" style="font-size: 13px; color: #666;"></p>
+      
+      <button class="btn-main" onclick="openMode('photo')">📷 キャラと撮影</button>
+      <button class="btn-main" style="background:#2196F3;" onclick="openMode('explain')">🔍 写真から解説</button>
+      <button class="btn-main" style="background:#4CAF50;" onclick="openMode('chat')">💬 キャラと雑談</button>
+      <button class="btn-main" style="background:#888; margin-top:10px;" onclick="closeModal('modal-char-detail')">閉じる</button>
+    </div>
+  </div>
+
+  <!-- ==================== 5. 機能画面 (撮影/解説/雑談) ==================== -->
+  <div id="view-mode" class="view" style="background:white;">
+    <button class="btn-close" style="top:10px; left:10px;" onclick="switchView('view-collection')">← 戻る</button>
+    <div class="container" style="padding-top:60px;">
+      
+      <!-- Mode A: AR/2D撮影 -->
+      <div id="mode-photo" class="mode-content">
+        <h2>キャラクター撮影</h2>
+        <div id="photo-container">
+          <video id="camera-video" autoplay playsinline></video>
+          <div id="overlay-char">💧</div>
+        </div>
+        <button class="btn-main" onclick="takePhoto()">📸 パシャリ（撮影）</button>
+      </div>
+
+      <!-- Mode B: 写真から解説 -->
+      <div id="mode-explain" class="mode-content">
+        <h2>写真から解説</h2>
+        <p style="font-size: 13px; color: #666;">写真をアップロードすると、キャラが豆知識を教えてくれます。</p>
+        <input type="file" id="explain-file" accept="image/*" onchange="processImage(this)">
+        <div id="explain-result" style="margin-top: 20px; display:none; text-align:center;">
+          <img id="preview-img" style="max-width: 100%; border-radius: 10px;">
+          <div style="background:#E9ECEF; padding:15px; border-radius:15px; margin-top:10px; font-weight:bold;" id="explain-text"></div>
+        </div>
+      </div>
+
+      <!-- Mode C: 雑談 -->
+      <div id="mode-chat" class="mode-content">
+        <h2 id="chat-title">キャラと雑談</h2>
+        <div class="chat-box" id="chat-box"></div>
+        <div class="chat-input-set">
+          <input type="text" id="chat-input" placeholder="メッセージを入力...">
+          <button class="btn-main" style="width: auto; margin:0; padding:10px 20px;" onclick="sendMessage()">送信</button>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ==================== ナビゲーションバー ==================== -->
+  <div class="nav-bar">
+    <button class="nav-item active" onclick="switchView('view-stamps')">
+      <span class="nav-icon">⭐</span>スタンプ帳
+    </button>
+    <button class="nav-item" onclick="switchView('view-collection')">
+      <span class="nav-icon">📖</span>図鑑・コレクション
+    </button>
+  </div>
+
+  <!-- A-Frame AR Scene (背景で待機) -->
+  <a-scene embedded arjs="sourceType: webcam; debugUIEnabled: false;" style="position:fixed; top:0; left:0; width:100vw; height:100vh; z-index:-1;">
+    <a-marker type="pattern" url="pattern-marker.patt" id="marker-spot1">
+      <a-box position="0 0.5 0" material="color: #FF9800;"></a-box>
+    </a-marker>
+    <a-entity camera></a-entity>
+  </a-scene>
+
+  <!-- ==================== JavaScript ロジック ==================== -->
+  <script>
+    // --- データ定義 ---
+    const SPOTS = [
+      {
+        id: 'spot1',
+        markerId: 'marker-spot1',
+        name: '中央広場',
+        stampIcon: '🌸',
+        hasCharacter: true,
+        char: {
+          id: 'char-flower',
+          name: 'はなちゃん',
+          icon: '🌸',
+          desc: 'お花が大好きな妖精。季節のお花について教えてくれるよ！',
+          responses: ['お花に水はあげた？', '今日はいい天気でお散歩日和だね！', '綺麗な花を見つけたら写真で見せてね。']
+        }
+      },
+      {
+        id: 'spot2',
+        markerId: 'marker-spot2',
+        name: '展望デッキ',
+        stampIcon: '🗼',
+        hasCharacter: false
+      }
+    ];
+
+    // 保存データ (LocalStorage)
+    let myStamps = JSON.parse(localStorage.getItem('my_stamps') || '[]');
+    let myChars = JSON.parse(localStorage.getItem('my_chars') || '[]');
+    let selectedChar = null;
+
+    // --- 画面切り替え ---
+    function switchView(viewId) {
+      document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+      document.getElementById(viewId).classList.add('active');
+      
+      // ナビゲーションバーのスタイル更新
+      document.querySelectorAll('.nav-item').forEach(btn => btn.classList.remove('active'));
+      if(viewId === 'view-stamps') document.querySelectorAll('.nav-item')[0].classList.add('active');
+      if(viewId === 'view-collection') document.querySelectorAll('.nav-item')[1].classList.add('active');
+
+      renderUI();
+    }
+
+    // UI描画更新
+    function renderUI() {
+      // 1. スタンプ一覧
+      const stampGrid = document.getElementById('stamp-grid');
+      stampGrid.innerHTML = SPOTS.map(spot => {
+        const isGot = myStamps.includes(spot.id);
+        return `
+          <div class="card ${isGot ? 'unlocked' : ''}">
+            <div class="card-icon">${spot.stampIcon}</div>
+            <div class="card-title">${spot.name}</div>
+            <div style="font-size:10px; color:#888;">${isGot ? '獲得済み' : '未獲得'}</div>
+          </div>
+        `;
+      }).join('');
+
+      // 2. コレクション一覧
+      const charGrid = document.getElementById('char-grid');
+      const unlockedChars = SPOTS.filter(s => s.hasCharacter && myChars.includes(s.char.id)).map(s => s.char);
+      
+      if (unlockedChars.length === 0) {
+        charGrid.innerHTML = '<p style="grid-column: span 2; color:#888;">まだ友達がいません。<br>スタンプラリーでキャラクターを見つけよう！</p>';
+      } else {
+        charGrid.innerHTML = unlockedChars.map(c => `
+          <div class="card unlocked" onclick="openCharDetail('${c.id}')">
+            <div class="card-icon">${c.icon}</div>
+            <div class="card-title">${c.name}</div>
+          </div>
+        `).join('');
+      }
+    }
+
+    // --- キャラ詳細モーダル ---
+    function openCharDetail(charId) {
+      const spot = SPOTS.find(s => s.hasCharacter && s.char.id === charId);
+      if (!spot) return;
+      selectedChar = spot.char;
+
+      document.getElementById('detail-icon').innerText = selectedChar.icon;
+      document.getElementById('detail-name').innerText = selectedChar.name;
+      document.getElementById('detail-desc').innerText = selectedChar.desc;
+      document.getElementById('modal-char-detail').style.display = 'flex';
+    }
+
+    function closeModal(modalId) {
+      document.getElementById(modalId).style.display = 'none';
+    }
+
+    // --- モード切替（撮影・解説・雑談） ---
+    function openMode(mode) {
+      closeModal('modal-char-detail');
+      document.querySelectorAll('.mode-content').forEach(m => m.style.display = 'none');
+      document.getElementById(`mode-${mode}`).style.display = 'block';
+
+      if (mode === 'photo') initCameraPhoto();
+      if (mode === 'chat') initChat();
+
+      switchView('view-mode');
+    }
+
+    // 【1. キャラと撮影】
+    function initCameraPhoto() {
+      document.getElementById('overlay-char').innerText = selectedChar.icon;
+      const video = document.getElementById('camera-video');
+      navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
+        .then(stream => video.srcObject = stream)
+        .catch(err => alert('カメラの起動に失敗しました'));
+    }
+    function takePhoto() {
+      alert(`${selectedChar.name}との写真を撮影しました！（疑似機能）`);
+    }
+
+    // 【2. 写真から解説】
+    function processImage(input) {
+      if (input.files && input.files[0]) {
+        const reader = new FileReader();
+        reader.onload = function(e) {
+          document.getElementById('preview-img').src = e.target.result;
+          document.getElementById('explain-result').style.display = 'block';
+          document.getElementById('explain-text').innerText = `${selectedChar.name}「わあ！これは素敵な写真だね！ここに写っているのは〜〜だよ！」（AI/自動解説のプロトタイプ）`;
+        }
+        reader.readAsDataURL(input.files[0]);
+      }
+    }
+
+    // 【3. 雑談】
+    function initChat() {
+      document.getElementById('chat-title').innerText = `${selectedChar.name}との雑談`;
+      const chatBox = document.getElementById('chat-box');
+      chatBox.innerHTML = `
+        <div class="chat-msg char">
+          <div class="chat-bubble">${selectedChar.name}「ヤッホー！何について話す？」</div>
+        </div>
+      `;
+    }
+    function sendMessage() {
+      const input = document.getElementById('chat-input');
+      if (!input.value.trim()) return;
+
+      const chatBox = document.getElementById('chat-box');
+      // ユーザーのメッセージ
+      chatBox.innerHTML += `
+        <div class="chat-msg user"><div class="chat-bubble">${input.value}</div></div>
+      `;
+      
+      const userText = input.value;
+      input.value = '';
+      chatBox.scrollTop = chatBox.scrollHeight;
+
+      // キャラの返信（ランダム応答プロトタイプ）
+      setTimeout(() => {
+        const reply = selectedChar.responses[Math.floor(Math.random() * selectedChar.responses.length)];
+        chatBox.innerHTML += `
+          <div class="chat-msg char"><div class="chat-bubble">${selectedChar.name}「${reply}」</div></div>
+        `;
+        chatBox.scrollTop = chatBox.scrollHeight;
+      }, 1000);
+    }
+
+    // --- AR読取処理 ---
+    function startAR() {
+      switchView('ar-view');
+      document.querySelector('a-scene').style.zIndex = '15';
+    }
+    function stopAR() {
+      document.querySelector('a-scene').style.zIndex = '-1';
+      switchView('view-stamps');
+    }
+
+    // ARマーカー検出ロジック (2秒長押し)
+    let arTimer = null;
+    document.querySelectorAll('a-marker').forEach(marker => {
+      marker.addEventListener('markerFound', () => {
+        const spot = SPOTS.find(s => s.markerId === marker.id);
+        if (!spot || myStamps.includes(spot.id)) return;
+
+        document.getElementById('progress-box').style.display = 'block';
+        document.getElementById('gauge-text').innerText = 'スキャン中...';
+
+        arTimer = setTimeout(() => {
+          // スタンプ獲得
+          if(!myStamps.includes(spot.id)) myStamps.push(spot.id);
+          localStorage.setItem('my_stamps', JSON.stringify(myStamps));
+
+          // キャラ獲得
+          let charMsg = '';
+          if (spot.hasCharacter && !myChars.includes(spot.char.id)) {
+            myChars.push(spot.char.id);
+            localStorage.setItem('my_chars', JSON.stringify(myChars));
+            charMsg = `\nさらに「${spot.char.name}」が図鑑に追加されました！`;
+          }
+
+          alert(`【${spot.name}】のスタンプをGET！${charMsg}`);
+          document.getElementById('progress-box').style.display = 'none';
+          stopAR();
+        }, 2000);
+      });
+
+      marker.addEventListener('markerLost', () => {
+        if (arTimer) clearTimeout(arTimer);
+        document.getElementById('progress-box').style.display = 'none';
+      });
+    });
+
+    // 初期化実行
+    renderUI();
+  </script>
+</body>
+</html>
